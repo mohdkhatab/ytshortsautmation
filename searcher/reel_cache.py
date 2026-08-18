@@ -33,7 +33,7 @@ def load_cache() -> dict:
     if CACHE_FILE.exists():
         try:
             data = json.loads(CACHE_FILE.read_text())
-            if time.time() - data.get("timestamp", 0) < CACHE_MAX_AGE:
+            if data.get("reels"):
                 return data
         except Exception:
             pass

@@ -23,3 +23,5 @@ services:
         sync: false
       - key: AI_MODEL
         sync: false
+      - key: DATABASE_URL
+        sync: false

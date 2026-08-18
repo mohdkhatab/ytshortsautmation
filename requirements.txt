@@ -6,3 +6,4 @@ lxml>=5.0.0
 yt-dlp>=2024.10.22
 Pillow>=10.0.0
 brotli>=1.1.0
+psycopg2-binary>=2.9.0
