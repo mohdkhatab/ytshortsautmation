@@ -167,7 +167,19 @@ def get_search_results(category: str = None) -> dict:
 
 
 async def ensure_cache():
-    """Make sure cache has data. Refresh if empty or stale."""
+    """Make sure cache has data. Only refresh if empty or stale, never overwrite good data with empty."""
     cache = load_cache()
-    if not cache.get("reels") or time.time() - cache.get("timestamp", 0) > CACHE_MAX_AGE:
+    has_data = bool(cache.get("reels"))
+    is_stale = time.time() - cache.get("timestamp", 0) > CACHE_MAX_AGE
+
+    if has_data and not is_stale:
+        return
+
+    if is_stale:
+        new_cache = await refresh_cache()
+        new_has_data = bool(new_cache.get("reels"))
+        if new_has_data:
+            return
+        log.warning("Refresh returned empty data, keeping old cache")
+    else:
         await refresh_cache()

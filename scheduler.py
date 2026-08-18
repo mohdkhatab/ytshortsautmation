@@ -52,9 +52,8 @@ class AutoScheduler:
                 f"📸 Instagram se search ho raha hai...")
 
         task_id = create_task(
-            user_id=chat_ids[0],
             chat_id=chat_ids[0],
-            prompt="Auto upload - anime reel",
+            category="Auto Upload",
         )
         update_task(task_id, status=TaskStatus.SEARCHING)
 
