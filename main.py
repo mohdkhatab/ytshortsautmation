@@ -22,14 +22,7 @@ async def post_init(app):
     log.info("Auto upload: Har 30 min pe Instagram reel -> YouTube Shorts")
 
 
-def main():
-    log.info("Starting Anime Upload Agent (Bot + Auto Scheduler)...")
-
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
+async def run():
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_cmd))
@@ -41,8 +34,18 @@ def main():
     application.post_init = post_init
 
     log.info("Bot is running! Send /start in Telegram.")
-    application.run_polling(drop_pending_updates=True)
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
+
+    stop_event = asyncio.Event()
+    await stop_event.wait()
+
+    await application.updater.stop()
+    await application.stop()
+    await application.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    log.info("Starting Anime Upload Agent (Bot + Auto Scheduler)...")
+    asyncio.run(run())
