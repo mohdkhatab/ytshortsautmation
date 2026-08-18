@@ -20,11 +20,15 @@ async def post_init(app):
     asyncio.create_task(scheduler._scheduler_loop())
     log.info("Bot + Auto Scheduler + Health API all running!")
     log.info("Auto upload: Har 30 min pe Instagram reel -> YouTube Shorts")
-    log.info("Health check: http://0.0.0.0:8080/health")
 
 
 def main():
     log.info("Starting Anime Upload Agent (Bot + Auto Scheduler)...")
+
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     application = Application.builder().token(BOT_TOKEN).build()
 
