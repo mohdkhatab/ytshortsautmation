@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: anime-upload-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: BOT_TOKEN
+        sync: false
+      - key: ALLOWED_USERS
+        sync: false
+      - key: UPLOAD_API_URL
+        sync: false
+      - key: UPLOAD_API_BASE
+        sync: false
+      - key: UPLOAD_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: AI_MODEL
+        sync: false
