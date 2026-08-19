@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 from telegram import Bot
+from telegram.helpers import escape_markdown
 
 from logger import log
 from agent.orchestrator import AnimeUploadAgent, TaskStatus
@@ -17,6 +18,11 @@ import config
 IST = ZoneInfo("Asia/Kolkata")
 
 agent = AnimeUploadAgent()
+
+
+def _md(text) -> str:
+    """Escape dynamic text for Telegram legacy Markdown to avoid parse errors."""
+    return escape_markdown(str(text), version=1)
 
 
 class AutoScheduler:
@@ -73,7 +79,7 @@ class AutoScheduler:
                 for chat_id in chat_ids:
                     await self._notify(chat_id,
                         f"📸 **{ig_count} reels mil gaye!**\n"
-                        f"📂 Category: {category}\n"
+                        f"📂 Category: {_md(category)}\n"
                         f"🤖 AI se title/description bana raha hoon...")
 
                 # Step 2: AI Generation
@@ -83,15 +89,17 @@ class AutoScheduler:
                 title = content.get("title", "Anime Edit #Shorts")
                 description = content.get("description", "Anime compilation #Shorts")
                 tags = content.get("tags", ["anime", "animeedit", "shorts"])
-                hashtags = content.get("hashtags", ["#Shorts", "#Anime"])
+                if isinstance(tags, str):
+                    tags = [t.strip() for t in tags.split(",") if t.strip()]
+                context = content.get("context", "")
 
                 update_task(task_id, title=title, tags=tags)
 
                 for chat_id in chat_ids:
                     await self._notify(chat_id,
                         f"🤖 **AI Content Ready:**\n"
-                        f"📌 Title: {title}\n"
-                        f"🏷️ Tags: {', '.join(tags[:5])}\n"
+                        f"📌 Title: {_md(title)}\n"
+                        f"🏷️ Tags: {_md(', '.join(tags[:5]))}\n"
                         f"⬇️ Downloading reel...")
 
                 # Step 3: Download
@@ -131,16 +139,13 @@ class AutoScheduler:
                         f"📤 YouTube pe upload ho raha hai...")
 
                 # Step 4: Upload
-                log.info(f"[AutoUpload Task {task_id}] Step 4: Uploading to YouTube")
+                log.info(f"[AutoUpload Task {task_id}] Step 4: Uploading to YouTube Shorts API")
                 update_task(task_id, status=TaskStatus.UPLOADING)
 
-                metadata = {
-                    "title": title,
-                    "description": description,
-                    "tags": tags,
-                    "hashtags": hashtags,
-                }
-                upload_result = await upload_video(video_path, metadata, session, task_id)
+                upload_result = await upload_video(
+                    session, task_id, video_path, video_url,
+                    title, description, tags, context,
+                )
 
                 if upload_result.get("success"):
                     youtube_url = upload_result.get("youtube_url", "")
@@ -149,9 +154,9 @@ class AutoScheduler:
                     for chat_id in chat_ids:
                         await self._notify(chat_id,
                             f"🎉 **AUTO UPLOAD SUCCESS!**\n\n"
-                            f"📌 Title: {title}\n"
-                            f"🔗 YouTube: {youtube_url}\n"
-                            f"📸 Source: {video_url}\n"
+                            f"📌 Title: {_md(title)}\n"
+                            f"🔗 YouTube: {_md(youtube_url)}\n"
+                            f"📸 Source: {_md(video_url)}\n"
                             f"⏰ Next upload: 30 min baad\n\n"
                             f"🤖 Auto upload continue rahega!")
                 else:
@@ -160,7 +165,7 @@ class AutoScheduler:
 
                     for chat_id in chat_ids:
                         await self._notify(chat_id,
-                            f"❌ **Upload Failed:** {error}\n"
+                            f"❌ **Upload Failed:** {_md(error)}\n"
                             f"🔄 Next upload: 30 min baad try hoga")
 
                 cleanup_files(video_path)
@@ -170,7 +175,7 @@ class AutoScheduler:
             update_task(task_id, status=TaskStatus.FAILED, error=str(e))
             for chat_id in chat_ids:
                 await self._notify(chat_id,
-                    f"❌ **Auto Upload Error:** {str(e)[:200]}\n"
+                    f"❌ **Auto Upload Error:** {_md(str(e)[:200])}\n"
                     f"🔄 Next upload: 30 min baad try hoga")
 
     async def _scheduler_loop(self):

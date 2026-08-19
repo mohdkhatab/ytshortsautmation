@@ -45,37 +45,75 @@ def save_cache(data: dict):
     CACHE_FILE.write_text(json.dumps(data, indent=2))
 
 
-async def fetch_reels_from_ddg(session: aiohttp.ClientSession, query: str) -> list[dict]:
-    """Fetch Instagram reel URLs from DuckDuckGo HTML search."""
-    results = []
-    try:
-        url = "https://html.duckduckgo.com/html/"
-        payload = {"q": f"site:instagram.com/reel {query}", "kl": "us-en"}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        }
-        async with session.post(url, data=payload, headers=headers,
-                               timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            html = await resp.text()
+DDG_ENDPOINTS = [
+    "https://html.duckduckgo.com/html/",
+    "https://lite.duckduckgo.com/lite/",
+]
 
-        soup = BeautifulSoup(html, "lxml")
-        for a in soup.find_all("a", class_="result__a", href=True):
-            href = a["href"]
-            if "instagram.com" in href:
-                shortcode = href.rstrip("/").split("/")[-1]
-                if shortcode and len(shortcode) > 5:
-                    caption_el = a.find("span") or a.find("div")
-                    caption = caption_el.get_text(strip=True)[:200] if caption_el else query
-                    results.append({
-                        "source": "instagram",
-                        "shortcode": shortcode,
-                        "url": f"https://www.instagram.com/reel/{shortcode}/",
-                        "caption": caption,
-                        "is_video": True,
-                    })
-    except Exception as e:
-        log.warning(f"DDG fetch failed for '{query}': {e}")
-    return results
+DDG_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+}
+
+
+async def fetch_reels_from_ddg(session: aiohttp.ClientSession, query: str, max_results: int = 10) -> list[dict]:
+    """Fetch Instagram reel URLs from DuckDuckGo HTML search with retries."""
+    results = []
+    seen = set()
+
+    def _add_result(href: str, caption_text: str):
+        if "/l/?uddg=" in href:
+            from urllib.parse import parse_qs, unquote, urlparse
+            href = parse_qs(urlparse(href).query).get("uddg", [""])[0]
+            href = unquote(href)
+        if "instagram.com" not in href:
+            return
+        shortcode = href.rstrip("/").split("/")[-1]
+        if not shortcode or len(shortcode) <= 5 or shortcode in seen:
+            return
+        seen.add(shortcode)
+        results.append({
+            "source": "instagram",
+            "shortcode": shortcode,
+            "url": f"https://www.instagram.com/reel/{shortcode}/",
+            "caption": caption_text[:200] or query,
+            "is_video": True,
+        })
+
+    for endpoint in DDG_ENDPOINTS:
+        if len(results) >= max_results:
+            break
+        for attempt in range(3):
+            if len(results) >= max_results:
+                break
+            try:
+                payload = {"q": f"site:instagram.com/reel {query}", "kl": "us-en"}
+                async with session.post(endpoint, data=payload, headers=DDG_HEADERS,
+                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        log.warning(f"DDG {endpoint} HTTP {resp.status} for '{query}' (attempt {attempt+1})")
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                    html = await resp.text()
+
+                soup = BeautifulSoup(html, "lxml")
+                for a in soup.find_all("a", href=True):
+                    if a.get("class") is None and "instagram.com" in a.get("href", ""):
+                        _add_result(a["href"], a.get_text(strip=True))
+                for a in soup.find_all("a", class_="result__a", href=True):
+                    _add_result(a["href"], a.get_text(strip=True))
+                for a in soup.find_all("a", class_="result-link", href=True):
+                    _add_result(a["href"], a.get_text(strip=True))
+
+                if results:
+                    break
+                await asyncio.sleep(2 * (attempt + 1))
+            except Exception as e:
+                log.warning(f"DDG fetch failed for '{query}' ({endpoint}): {e}")
+                await asyncio.sleep(2)
+    return results[:max_results]
 
 
 async def fetch_reels_from_yandex(session: aiohttp.ClientSession, query: str) -> list[dict]:
@@ -122,7 +160,11 @@ async def refresh_cache():
                 cache["reels"][cat["name"]] = reels
                 log.info(f"Cache[{cat['name']}]: {len(reels)} reels from '{query}'")
             else:
-                log.warning(f"Cache[{cat['name']}]: 0 reels from '{query}'")
+                old = cache["reels"].get(cat["name"], [])
+                if old:
+                    log.warning(f"Cache[{cat['name']}]: 0 new reels from '{query}', keeping {len(old)} old")
+                else:
+                    log.warning(f"Cache[{cat['name']}]: 0 reels from '{query}'")
 
             await asyncio.sleep(2)
 

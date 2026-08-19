@@ -1,5 +1,6 @@
 import json
 import random
+import re
 from typing import Optional
 import aiohttp
 
@@ -165,18 +166,26 @@ async def _call_openrouter(session: aiohttp.ClientSession, prompt: str) -> Optio
 
 
 def _parse_ai_response(content: str) -> Optional[dict]:
-    """Parse AI response, handling markdown code blocks."""
+    """Parse AI response, handling markdown code blocks and surrounding prose."""
     content = content.strip()
     if content.startswith("```"):
-        content = content.split("\n", 1)[1]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
+        m = re.match(r"^```[a-zA-Z]*\s*\n", content)
+        if m:
+            content = content[m.end():]
+        elif "\n" in content:
+            content = content.split("\n", 1)[1]
+        content = re.sub(r"```\s*$", "", content).strip()
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
         log.warning(f"Failed to parse AI JSON: {e}")
         log.debug(f"Raw content: {content[:300]}")
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
         return None
 
 
