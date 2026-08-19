@@ -11,10 +11,11 @@ from bs4 import BeautifulSoup
 
 from logger import log
 import config
+from searcher.web_search import search_instagram_via_google
 
 
 CACHE_FILE = config.BASE_DIR / "reel_cache.json"
-CACHE_MAX_AGE = 3600  # 1 hour
+CACHE_MAX_AGE = 4 * 3600  # 4 hours
 
 ANIME_CATEGORIES = [
     {"name": "Naruto", "queries": ["naruto anime edit reel", "naruto amv instagram", "naruto edit viral"]},
@@ -85,13 +86,13 @@ async def fetch_reels_from_ddg(session: aiohttp.ClientSession, query: str, max_r
     for endpoint in DDG_ENDPOINTS:
         if len(results) >= max_results:
             break
-        for attempt in range(3):
+        for attempt in range(2):
             if len(results) >= max_results:
                 break
             try:
                 payload = {"q": f"site:instagram.com/reel {query}", "kl": "us-en"}
                 async with session.post(endpoint, data=payload, headers=DDG_HEADERS,
-                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                       timeout=aiohttp.ClientTimeout(total=12)) as resp:
                     if resp.status != 200:
                         log.warning(f"DDG {endpoint} HTTP {resp.status} for '{query}' (attempt {attempt+1})")
                         await asyncio.sleep(2 * (attempt + 1))
@@ -145,28 +146,30 @@ async def fetch_reels_from_yandex(session: aiohttp.ClientSession, query: str) ->
 
 
 async def refresh_cache():
-    """Refresh the reel URL cache from search engines."""
+    """Refresh the reel URL cache from search engines (all categories in parallel)."""
     log.info("Refreshing reel cache from search engines...")
     cache = load_cache()
 
-    async with aiohttp.ClientSession() as session:
-        for cat in ANIME_CATEGORIES:
-            query = random.choice(cat["queries"])
+    async def _refresh_category(session: aiohttp.ClientSession, cat: dict):
+        query = random.choice(cat["queries"])
+        reels = await search_instagram_via_google(session, f"{query} reel", max_results=10)
+        if not reels:
             reels = await fetch_reels_from_ddg(session, query)
-            if not reels:
-                reels = await fetch_reels_from_yandex(session, query)
+        if not reels:
+            reels = await fetch_reels_from_yandex(session, query)
 
-            if reels:
-                cache["reels"][cat["name"]] = reels
-                log.info(f"Cache[{cat['name']}]: {len(reels)} reels from '{query}'")
+        if reels:
+            cache["reels"][cat["name"]] = reels
+            log.info(f"Cache[{cat['name']}]: {len(reels)} reels from '{query}'")
+        else:
+            old = cache["reels"].get(cat["name"], [])
+            if old:
+                log.warning(f"Cache[{cat['name']}]: 0 new reels from '{query}', keeping {len(old)} old")
             else:
-                old = cache["reels"].get(cat["name"], [])
-                if old:
-                    log.warning(f"Cache[{cat['name']}]: 0 new reels from '{query}', keeping {len(old)} old")
-                else:
-                    log.warning(f"Cache[{cat['name']}]: 0 reels from '{query}'")
+                log.warning(f"Cache[{cat['name']}]: 0 reels from '{query}'")
 
-            await asyncio.sleep(2)
+    async with aiohttp.ClientSession() as session:
+        await asyncio.gather(*[_refresh_category(session, cat) for cat in ANIME_CATEGORIES])
 
     save_cache(cache)
     total = sum(len(v) for v in cache["reels"].values())
@@ -197,7 +200,7 @@ def get_search_results(category: str = None) -> dict:
     cache = load_cache()
     reels = cache.get("reels", {})
 
-    selected = category or random.choice(list(reels.keys())) if reels else "Anime Mix"
+    selected = (category or random.choice(list(reels.keys()))) if reels else "Anime Mix"
     cat_reels = reels.get(selected, reels.get("Anime Mix", []))
 
     return {
@@ -208,8 +211,20 @@ def get_search_results(category: str = None) -> dict:
     }
 
 
+_BG_REFRESH: asyncio.Task = None
+
+
+def _start_background_refresh():
+    """Start a cache refresh in the background without blocking the caller."""
+    global _BG_REFRESH
+    if _BG_REFRESH and not _BG_REFRESH.done():
+        return
+    _BG_REFRESH = asyncio.create_task(refresh_cache())
+
+
 async def ensure_cache():
-    """Make sure cache has data. Only refresh if empty or stale, never overwrite good data with empty."""
+    """Make sure cache has data. Never blocks the task: stale data is used
+    immediately while a refresh runs in the background."""
     cache = load_cache()
     has_data = bool(cache.get("reels"))
     is_stale = time.time() - cache.get("timestamp", 0) > CACHE_MAX_AGE
@@ -217,11 +232,8 @@ async def ensure_cache():
     if has_data and not is_stale:
         return
 
-    if is_stale:
-        new_cache = await refresh_cache()
-        new_has_data = bool(new_cache.get("reels"))
-        if new_has_data:
-            return
-        log.warning("Refresh returned empty data, keeping old cache")
-    else:
-        await refresh_cache()
+    if has_data and is_stale:
+        _start_background_refresh()
+        return
+
+    await refresh_cache()
