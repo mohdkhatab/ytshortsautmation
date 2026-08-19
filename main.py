@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 
 from logger import log
 from config import BOT_TOKEN
-from bot.telegram_bot import start_cmd, status_cmd, tasks_cmd, cancel_cmd, callback_handler
+from bot.telegram_bot import start_cmd, status_cmd, tasks_cmd, cancel_cmd, test_cmd, callback_handler
 from scheduler import scheduler
 from health_server import start_health_server
 
@@ -24,6 +24,7 @@ async def run():
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("tasks", tasks_cmd))
     application.add_handler(CommandHandler("cancel", cancel_cmd))
+    application.add_handler(CommandHandler("test", test_cmd))
     application.add_handler(CallbackQueryHandler(callback_handler))
 
     # 3. Initialize application & start scheduler

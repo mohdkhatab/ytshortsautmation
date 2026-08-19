@@ -1,4 +1,7 @@
 import asyncio
+import time
+
+import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -6,13 +9,21 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
+from telegram.helpers import escape_markdown
 
 from logger import log
 from agent.orchestrator import AnimeUploadAgent
-from db.database import get_task, get_user_tasks
+from db.database import get_task, get_user_tasks, get_conn
+from searcher.reel_cache import load_cache
+from searcher.web_search import search_instagram_via_google
+from ai_gen.content_gen import generate_content_with_ai
 import config
 
 agent = AnimeUploadAgent()
+
+
+def _md(text) -> str:
+    return escape_markdown(str(text), version=1)
 
 
 def is_allowed(user_id: int) -> bool:
@@ -123,6 +134,96 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Task #{task_id} already finished ya exist nahi karta.")
 
 
+async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🧪 /test - Run a full system health check."""
+    if not is_allowed(update.effective_user.id):
+        return
+    msg = await update.message.reply_text(
+        "🧪 **System Test Started!**\n"
+        "⏳ Testing database, cache, search, AI, upload API...\n"
+        "📋 Report aayegi kuch second mein."
+    )
+
+    async def run_tests():
+        results = []
+
+        try:
+            conn = get_conn()
+            conn.close()
+            results.append(("Database (PostgreSQL)", True, "connected"))
+        except Exception as e:
+            results.append(("Database (PostgreSQL)", False, str(e)[:80]))
+
+        cache = load_cache()
+        reels = cache.get("reels", {})
+        total = sum(len(v) for v in reels.values())
+        age_min = int((time.time() - cache.get("timestamp", 0)) / 60)
+        results.append(("Reel cache", total > 0, f"{total} reels | {age_min} min old"))
+
+        try:
+            import yt_dlp
+            results.append(("yt-dlp", True, yt_dlp.version.__version__))
+        except Exception as e:
+            results.append(("yt-dlp", False, str(e)[:80]))
+
+        if not config.UPLOAD_API_KEY:
+            results.append(("Upload API key", False, "UPLOAD_API_KEY not set in env"))
+        else:
+            results.append(("Upload API key", True, "set"))
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                found = await search_instagram_via_google(session, "naruto edit reel", max_results=3)
+                results.append(("Instagram search (Google)", len(found) > 0, f"{len(found)} reels"))
+            except Exception as e:
+                results.append(("Instagram search (Google)", False, str(e)[:80]))
+
+            try:
+                async with session.get(config.UPLOAD_API_BASE, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    results.append(("Upload API reachable", resp.status < 500, f"HTTP {resp.status}"))
+            except Exception as e:
+                results.append(("Upload API reachable", False, str(e)[:80]))
+
+            if config.OPENROUTER_API_KEY:
+                try:
+                    fake = {
+                        "selected_category": "Naruto",
+                        "keyword": "naruto amv edit",
+                        "instagram": [{"caption": "epic naruto edit"}],
+                        "youtube": [{"title": "Naruto Shippuden AMV"}],
+                    }
+                    content = await generate_content_with_ai(session, fake, 999)
+                    ok = bool(content.get("title"))
+                    detail = content["title"][:45] if ok else "fallback content"
+                    results.append(("AI generation (OpenRouter)", ok, detail))
+                except Exception as e:
+                    results.append(("AI generation (OpenRouter)", False, str(e)[:80]))
+            else:
+                results.append(("AI generation (OpenRouter)", False, "OPENROUTER_API_KEY not set"))
+
+        lines = []
+        for name, ok, detail in results:
+            lines.append(f"{'✅' if ok else '❌'} {name}: {_md(detail)}")
+        passed = sum(1 for _, ok, _ in results if ok)
+        verdict = "✅ ALL SYSTEMS OK!" if passed == len(results) else f"⚠️ {passed}/{len(results)} checks passed"
+        text = (
+            f"🧪 **System Test Report**\n\n"
+            + "\n".join(lines)
+            + f"\n\n{verdict}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=msg.message_id,
+                text=text,
+                parse_mode="Markdown",
+            )
+        except Exception:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode="Markdown")
+
+    asyncio.create_task(run_tests())
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not is_allowed(query.from_user.id):
@@ -153,7 +254,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/start - Main menu\n"
             "/status <id> - Task status\n"
             "/tasks - Recent tasks\n"
-            "/cancel <id> - Cancel task\n\n"
+            "/cancel <id> - Cancel task\n"
+            "/test - Full system check\n\n"
             "**Priority:** Instagram > YouTube > AnimeThemes",
             reply_markup=back_button(),
             parse_mode="Markdown",
@@ -278,6 +380,7 @@ def run_bot():
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("tasks", tasks_cmd))
     application.add_handler(CommandHandler("cancel", cancel_cmd))
+    application.add_handler(CommandHandler("test", test_cmd))
     application.add_handler(CallbackQueryHandler(callback_handler))
 
     log.info("Bot is running! Send /start in Telegram.")
