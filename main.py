@@ -13,16 +13,11 @@ from scheduler import scheduler
 from health_server import start_health_server
 
 
-async def post_init(app):
-    scheduler.set_bot(app.bot)
-    scheduler.start()
-    asyncio.create_task(start_health_server())
-    asyncio.create_task(scheduler._scheduler_loop())
-    log.info("Bot + Auto Scheduler + Health API all running!")
-    log.info("Auto upload: Har 30 min pe Instagram reel -> YouTube Shorts")
-
-
 async def run():
+    # 1. Start health web server IMMEDIATELY for Render port binding
+    await start_health_server()
+
+    # 2. Build Telegram Application
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_cmd))
@@ -31,13 +26,21 @@ async def run():
     application.add_handler(CommandHandler("cancel", cancel_cmd))
     application.add_handler(CallbackQueryHandler(callback_handler))
 
-    application.post_init = post_init
-
-    log.info("Bot is running! Send /start in Telegram.")
+    # 3. Initialize application & start scheduler
     await application.initialize()
+    scheduler.set_bot(application.bot)
+    scheduler.start()
+    asyncio.create_task(scheduler._scheduler_loop())
+
+    log.info("Bot + Auto Scheduler + Health API all running!")
+    log.info("Auto upload: Har 30 min pe Instagram reel -> YouTube Shorts")
+
+    # 4. Start polling
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
+    log.info("Telegram Polling active! Send /start in Telegram.")
 
+    # 5. Keep alive indefinitely
     stop_event = asyncio.Event()
     await stop_event.wait()
 

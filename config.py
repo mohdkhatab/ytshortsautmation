@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).parent
 # Telegram
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8703387868:AAEUdlgxSTw3cIIervWWF8_f2TrU1iDphJY")
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
 
 # YouTube Shorts Upload API
